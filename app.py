@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import pytz
+from datetime import datetime
 from data_loader import fetch_data
 from deriv_loader import fetch_deriv_data
 from analyzer import (
@@ -12,10 +14,17 @@ from analyzer import (
 )
 from visualizer import create_chart
 from backtester import run_backtest
+from ai_advisor import get_ai_suggestions
 
 st.set_page_config(layout="wide", page_title="Professional Trading Suite")
 
 st.sidebar.title("Trading Suite Settings")
+
+st.sidebar.header("Regional Settings")
+tz_list = pytz.all_timezones
+default_tz_idx = tz_list.index("UTC") if "UTC" in tz_list else 0
+selected_tz = st.sidebar.selectbox("Select Timezone", options=tz_list, index=default_tz_idx)
+current_time = datetime.now(pytz.timezone(selected_tz)).strftime("%Y-%m-%d %H:%M:%S")
 
 st.sidebar.header("Risk Management")
 balance = st.sidebar.number_input("Account Balance ($)", value=1000.0, step=100.0)
@@ -45,6 +54,9 @@ else:
     count = st.sidebar.slider("Number of Data Points", min_value=100, max_value=5000, value=1000)
 
 st.title(f"Market Analysis for {symbol}")
+
+# Summary Statement
+st.info(f"According to the time **{current_time} ({selected_tz})**, with a balance of **${balance:,.2f}**, and selected asset **{symbol}** ({data_source}):")
 
 @st.cache_data(ttl=300)
 def get_yahoo_data(symbol, interval, period):
@@ -105,6 +117,27 @@ try:
             sc3.metric("ATR Volatility", trade_details['ATR'])
     else:
         st.write("No active signal. Waiting for market conditions to align.")
+
+    # AI Suggestions Section
+    st.header("AI Strategy Advisor")
+    col_ai, col_story = st.columns([1, 1])
+
+    with col_ai:
+        with st.expander("View AI/Expert Insights", expanded=True):
+            ai_msg = get_ai_suggestions(df, symbol, verdict, trade_details if verdict != "Hold" else None)
+            st.markdown(ai_msg)
+
+    with col_story:
+        with st.expander("Market Context Story", expanded=True):
+            # Dynamic Market Story
+            rsi_val = df['RSI'].iloc[-1]
+            atr_val = df['ATR'].iloc[-1]
+            trend = "Bullish" if df['Close'].iloc[-1] > df['EMA_200'].iloc[-1] else "Bearish"
+            volatility = "High" if atr_val > df['ATR'].mean() else "Low"
+
+            st.write(f"**Trend:** The market is currently in a **{trend}** phase on this timeframe.")
+            st.write(f"**Volatility:** **{volatility}** (ATR: {atr_val:.2f}). Expect {'larger' if volatility == 'High' else 'smaller'} price swings.")
+            st.write(f"**Sentiment:** RSI at **{rsi_val:.2f}** indicates the market is {'overbought' if rsi_val > 70 else 'oversold' if rsi_val < 30 else 'neutral'}.")
 
     # 4. Main Chart
     fig = create_chart(df, symbol, levels=levels)

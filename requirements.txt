@@ -6,3 +6,5 @@ scipy>=1.10.0
 streamlit>=1.30.0
 websockets>=11.0
 nest-asyncio>=1.5.0
+pytz
+google-generativeai
