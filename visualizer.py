@@ -42,8 +42,11 @@ def create_chart(df, symbol, levels=None, backtest_results=None):
         for level in levels:
             fig.add_hline(y=level, line_dash="dot", line_color="gray", opacity=0.5, row=1, col=1)
 
-    # 2. Volume (Row 2)
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color='gray'), row=2, col=1)
+    # 2. Volume (Row 2) - Only show if there is volume data
+    if 'Volume' in df.columns and df['Volume'].sum() > 0:
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color='gray'), row=2, col=1)
+    else:
+        fig.add_annotation(text="No Volume Data", row=2, col=1, showarrow=False)
 
     # 3. RSI (Row 3)
     if 'RSI' in df.columns:

@@ -25,9 +25,12 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if adx is not None:
         df = pd.concat([df, adx], axis=1)
 
-    ichi_df, _ = ta.ichimoku(df['High'], df['Low'], df['Close'])
-    if ichi_df is not None:
-        df = pd.concat([df, ichi_df], axis=1)
+    try:
+        ichi_df, _ = ta.ichimoku(df['High'], df['Low'], df['Close'])
+        if ichi_df is not None:
+            df = pd.concat([df, ichi_df], axis=1)
+    except:
+        pass
 
     return df
 

@@ -1,20 +1,20 @@
 import yfinance as yf
 import pandas as pd
+import requests_cache
+from datetime import timedelta
+
+# Setup caching for yfinance to prevent rate limiting
+session = requests_cache.CachedSession(
+    'yfinance_cache',
+    expire_after=timedelta(minutes=15),
+    allowable_methods=['GET', 'POST']
+)
 
 def fetch_data(symbol: str, interval: str = '1d', period: str = '1y', fetch_daily: bool = False) -> pd.DataFrame:
     """
-    Fetches historical market data from yfinance.
-
-    Args:
-        symbol: Ticker symbol (e.g., 'AAPL', 'BTC-USD').
-        interval: Data interval (e.g., '1h', '1d').
-        period: Time period (e.g., '1y', 'max').
-        fetch_daily: If True and interval is not '1d', also returns daily data for higher-TF analysis.
-
-    Returns:
-        DataFrame or tuple of (DataFrame, Daily DataFrame).
+    Fetches historical market data from yfinance with caching.
     """
-    ticker = yf.Ticker(symbol)
+    ticker = yf.Ticker(symbol, session=session)
     df = ticker.history(period=period, interval=interval)
 
     if df.empty:
