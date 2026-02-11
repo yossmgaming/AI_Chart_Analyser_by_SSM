@@ -95,6 +95,18 @@ def detect_support_resistance(df: pd.DataFrame, window: int = 20) -> list:
                 cleaned_levels.append(levels[i])
     return cleaned_levels
 
+def calculate_turbulence(df: pd.DataFrame, window: int = 252) -> pd.Series:
+    """
+    Calculates the Financial Turbulence Index.
+    Simplified version for single asset: ((r - mean_r)^2) / var_r
+    """
+    returns = df['Close'].pct_change().dropna()
+    mu = returns.rolling(window=window).mean()
+    sigma = returns.rolling(window=window).var()
+
+    turbulence = ((returns - mu)**2) / sigma
+    return turbulence.reindex(df.index).fillna(0)
+
 def confirm_signals(df: pd.DataFrame) -> str:
     """
     Returns a Buy/Sell/Hold verdict based on the latest data.

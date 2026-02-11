@@ -1,7 +1,43 @@
 import google.generativeai as genai
 import os
+import numpy as np
+from lime import lime_tabular
 
-def get_ai_suggestions(df, symbol, verdict, trade_details=None):
+class ExplainableAI:
+    def __init__(self, agent, feature_names):
+        self.agent = agent
+        self.feature_names = feature_names
+        self.explainer = None
+
+    def predict_fn(self, x):
+        # SB3 predict returns (action, states)
+        # We need to return a probability-like distribution for classes
+        # For simplicity, we'll mock the probabilities or use the policy if accessible
+        # Since we use Discrete(3), we want (N, 3)
+        results = []
+        for obs in x:
+            action, _ = self.agent.predict(obs, deterministic=True)
+            # Mocking probability for LIME (1.0 for predicted action)
+            prob = np.zeros(3)
+            prob[action] = 1.0
+            results.append(prob)
+        return np.array(results)
+
+    def explain_trade(self, observation):
+        if self.explainer is None:
+            # We initialize with some training data if available, or just random sample
+            train_data = np.random.normal(0, 1, (100, len(self.feature_names)))
+            self.explainer = lime_tabular.LimeTabularExplainer(
+                train_data,
+                feature_names=self.feature_names,
+                class_names=['Hold', 'Buy', 'Sell'],
+                mode='classification'
+            )
+
+        exp = self.explainer.explain_instance(observation, self.predict_fn, num_features=5)
+        return exp.as_list()
+
+def get_ai_suggestions(df, symbol, verdict, trade_details=None, explanations=None):
     """
     Fetches AI-driven trading suggestions.
     Attempts to use Google Gemini if API_KEY is present, otherwise uses rule-based logic.
@@ -34,6 +70,10 @@ def get_ai_suggestions(df, symbol, verdict, trade_details=None):
             - Recommended Take Profit: {context['tp']}
 
             Provide a brief strategy explanation, the primary risk for this trade, and one 'pro deal' or tip for this specific setup.
+
+            Context on Model Decision (LIME Explanations):
+            {explanations if explanations else "No specific model data available."}
+
             Keep it concise and professional.
             """
             response = model.generate_content(prompt)

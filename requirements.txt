@@ -8,3 +8,16 @@ websockets>=11.0
 nest-asyncio>=1.5.0
 pytz
 google-generativeai
+torch
+gymnasium
+stable-baselines3
+lime
+python-binance
+beautifulsoup4
+reportlab
+requests
+ray
+msgpack
+pyyaml
+gym
+shimmy

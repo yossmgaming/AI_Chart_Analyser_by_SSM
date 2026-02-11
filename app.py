@@ -4,17 +4,25 @@ import pytz
 from datetime import datetime
 from data_loader import fetch_data
 from deriv_loader import fetch_deriv_data
+from exchange_l2_loader import ExchangeL2Loader
+from sentiment_analyzer import SentimentAnalyzer
+from risk_manager import RiskManager
 from analyzer import (
     add_technical_indicators,
     detect_candlestick_patterns,
     detect_divergence,
     detect_support_resistance,
     confirm_signals,
-    calculate_trade_levels
+    calculate_trade_levels,
+    calculate_turbulence
 )
+from marl_agents import MultiAgentTradingEnv, TradingEnsemble, DeepLOBExtractor
 from visualizer import create_chart
 from backtester import run_backtest
-from ai_advisor import get_ai_suggestions
+from ai_advisor import get_ai_suggestions, ExplainableAI
+from exporter import export_to_pdf, export_to_json
+import plotly.express as px
+import time
 
 st.set_page_config(layout="wide", page_title="Professional Trading Suite")
 
@@ -30,12 +38,15 @@ st.sidebar.header("Risk Management")
 balance = st.sidebar.number_input("Account Balance ($)", value=1000.0, step=100.0)
 risk_pct = st.sidebar.slider("Risk per Trade (%)", min_value=0.1, max_value=5.0, value=1.0)
 
-data_source = st.sidebar.radio("Select Data Source", options=["Yahoo Finance", "Deriv"])
+data_source = st.sidebar.radio("Select Data Source", options=["Yahoo Finance", "Deriv", "Coinbase L2 (Quant)"])
 
 if data_source == "Yahoo Finance":
     symbol = st.sidebar.text_input("Enter Ticker Symbol", value="BTC-USD")
     interval = st.sidebar.selectbox("Select Interval", options=['1h', '1d', '1wk'], index=1)
     period = st.sidebar.selectbox("Select Period", options=['1mo', '3mo', '6mo', '1y', '2y', '5y', 'max'], index=3)
+elif data_source == "Coinbase L2 (Quant)":
+    symbol = st.sidebar.text_input("Enter Coinbase Symbol", value="BTC-USD")
+    interval = "1m"
 else:
     deriv_symbols = {
         "Volatility 10 Index": "R_10",
@@ -70,8 +81,67 @@ try:
     # 1. Fetch Data
     if data_source == "Yahoo Finance":
         df = get_yahoo_data(symbol, interval, period)
-    else:
+    elif data_source == "Deriv":
         df = get_deriv_data(symbol, interval, count)
+    else:
+        # Coinbase Quant Mode
+        loader = ExchangeL2Loader()
+        depth = loader.get_order_book(symbol)
+        st.subheader("Real-time LOB (Top 10 Levels)")
+        lob_df = pd.DataFrame({
+            'Bid Price': [b[0] for b in depth['bids'][:10]],
+            'Bid Vol': [b[1] for b in depth['bids'][:10]],
+            'Ask Price': [a[0] for a in depth['asks'][:10]],
+            'Ask Vol': [a[1] for a in depth['asks'][:10]]
+        })
+        st.table(lob_df)
+
+        # Financial Turbulence
+        # For Quant mode, we need some historical data to calc turbulence
+        df_hist = get_yahoo_data("BTC-USD", "1h", "1mo")
+        turbulence = calculate_turbulence(df_hist).iloc[-1]
+        st.sidebar.metric("Turbulence Index", f"{turbulence:.2f}")
+        rm = RiskManager(turbulence_threshold=10.0)
+        kill, msg = rm.check_kill_switch(turbulence)
+        if kill:
+            st.error(msg)
+        else:
+            st.success(msg)
+
+        # MARL Prediction
+        st.header("MARL Ensemble Prediction")
+        env = MultiAgentTradingEnv(loader)
+        ensemble = TradingEnsemble(env)
+        obs, _ = env.reset()
+        action, agent_name = ensemble.get_action(obs)
+        verdicts = ["Hold", "Buy", "Sell"]
+        st.info(f"Ensemble Agent **{agent_name}** recommends: **{verdicts[action]}**")
+
+        # Explainability
+        if st.checkbox("Show Decision Transparency (LIME)"):
+            feat_names = [f"LOB_{i}" for i in range(40)] + ["Sentiment"] + ["EMA20", "EMA50", "EMA200", "RSI", "ATR"]
+            xai = ExplainableAI(ensemble.agents[agent_name], feat_names)
+            exps = xai.explain_trade(obs)
+            exp_df = pd.DataFrame(exps, columns=["Feature", "Influence"])
+            fig_exp = px.bar(exp_df, x="Influence", y="Feature", orientation='h', title="Feature Influence")
+            st.plotly_chart(fig_exp)
+
+        # Download Section
+        st.header("Export Quant Data")
+        if st.button("Generate PDF Report"):
+            report_data = {
+                "Symbol": symbol,
+                "Agent": agent_name,
+                "Verdict": verdicts[action],
+                "Turbulence": turbulence,
+                "Time": current_time
+            }
+            pdf_path = export_to_pdf(report_data)
+            with open(pdf_path, "rb") as f:
+                st.download_button("Download PDF", f, file_name="report.pdf")
+
+        df = df_hist # Use history for the rest of the visualizer
+
 
     # 2. Add Indicators & Patterns
     df = add_technical_indicators(df)
@@ -124,6 +194,13 @@ try:
 
     with col_ai:
         with st.expander("View AI/Expert Insights", expanded=True):
+            # Integrate Sentiment Analysis
+            if st.button("Run Real-time Sentiment Analysis"):
+                sa = SentimentAnalyzer()
+                sent, risk = sa.get_aggregate_scores(symbol)
+                st.write(f"**Aggregated News Sentiment:** {sent:.2f}/5.0")
+                st.write(f"**Market Risk Score:** {risk:.2f}/5.0")
+
             ai_msg = get_ai_suggestions(df, symbol, verdict, trade_details if verdict != "Hold" else None)
             st.markdown(ai_msg)
 
