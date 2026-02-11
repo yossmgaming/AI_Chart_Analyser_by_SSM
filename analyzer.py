@@ -131,3 +131,31 @@ def confirm_signals(df: pd.DataFrame) -> str:
     if score >= 2: return "Buy"
     elif score <= -2: return "Sell"
     else: return "Hold"
+
+def calculate_trade_levels(df: pd.DataFrame, verdict: str, rr_ratio: float = 2.0):
+    """
+    Calculates Entry, Stop Loss, and Take Profit levels using ATR.
+    """
+    if df.empty or verdict == "Hold":
+        return None
+
+    latest = df.iloc[-1]
+    entry_price = latest['Close']
+    atr = latest['ATR'] if 'ATR' in latest and not pd.isna(latest['ATR']) else entry_price * 0.01
+
+    # Use 2x ATR for Stop Loss as a standard practice
+    sl_dist = 2 * atr
+
+    if verdict == "Buy":
+        sl = entry_price - sl_dist
+        tp = entry_price + (sl_dist * rr_ratio)
+    else: # Sell
+        sl = entry_price + sl_dist
+        tp = entry_price - (sl_dist * rr_ratio)
+
+    return {
+        'Entry': round(entry_price, 5),
+        'Stop Loss': round(sl, 5),
+        'Take Profit': round(tp, 5),
+        'ATR': round(atr, 5)
+    }

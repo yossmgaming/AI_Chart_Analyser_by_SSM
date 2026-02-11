@@ -14,7 +14,7 @@ def main():
 
     results = []
     for symbol in symbols:
-        signal_data = generate_signals(symbol.strip())
+        signal_data = generate_signals(symbol.strip(), balance=1000, risk_pct=1)
         if isinstance(signal_data, dict):
             print(f"{signal_data['Symbol']:<10} | {signal_data['Final Signal']:<15} | {signal_data['1h Verdict']:<10} | {signal_data['1d Verdict']:<10} | {signal_data['Current Price']:<10}")
             results.append(signal_data)

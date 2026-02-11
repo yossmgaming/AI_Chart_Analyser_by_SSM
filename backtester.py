@@ -72,12 +72,31 @@ def run_backtest(df: pd.DataFrame, initial_capital: float = 10000.0, interval: s
 
     sharpe_ratio = (data['Strategy_Return'].mean() / data['Strategy_Return'].std()) * np.sqrt(ann_factor) if data['Strategy_Return'].std() != 0 else 0
 
+    # Win Rate
+    # A trade is considered "won" if the strategy return during that period was positive
+    trades = data[data['Position'] != 0]['Strategy_Return'].dropna()
+    winning_trades = trades[trades > 0]
+    win_rate = len(winning_trades) / len(trades) if len(trades) > 0 else 0
+
     results = {
         'Total Return': f"{total_return:.2%}",
         'Buy & Hold Return': f"{buy_hold_return:.2%}",
         'Max Drawdown': f"{max_drawdown:.2%}",
         'Sharpe Ratio': f"{sharpe_ratio:.2f}",
+        'Win Rate': f"{win_rate:.2%}",
         'Final Capital': f"{initial_capital * (1 + total_return):.2f}"
     }
 
     return results, data
+
+def get_signal_stats(df: pd.DataFrame):
+    """
+    Returns win rate and average performance for the signals generated.
+    """
+    res, _ = run_backtest(df)
+    if res:
+        return {
+            'Win Rate': res['Win Rate'],
+            'Expected Profit': res['Total Return']
+        }
+    return {"Win Rate": "0%", "Expected Profit": "0%"}
