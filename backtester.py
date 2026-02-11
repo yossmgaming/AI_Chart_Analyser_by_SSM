@@ -72,6 +72,14 @@ def run_backtest(df: pd.DataFrame, initial_capital: float = 10000.0, interval: s
 
     sharpe_ratio = (data['Strategy_Return'].mean() / data['Strategy_Return'].std()) * np.sqrt(ann_factor) if data['Strategy_Return'].std() != 0 else 0
 
+    # Sortino Ratio
+    negative_returns = data['Strategy_Return'][data['Strategy_Return'] < 0]
+    downside_std = negative_returns.std()
+    sortino_ratio = (data['Strategy_Return'].mean() / downside_std) * np.sqrt(ann_factor) if downside_std != 0 else 0
+
+    # Calmar Ratio
+    calmar_ratio = total_return / abs(max_drawdown) if max_drawdown != 0 else 0
+
     # Win Rate
     # A trade is considered "won" if the strategy return during that period was positive
     trades = data[data['Position'] != 0]['Strategy_Return'].dropna()
@@ -83,6 +91,8 @@ def run_backtest(df: pd.DataFrame, initial_capital: float = 10000.0, interval: s
         'Buy & Hold Return': f"{buy_hold_return:.2%}",
         'Max Drawdown': f"{max_drawdown:.2%}",
         'Sharpe Ratio': f"{sharpe_ratio:.2f}",
+        'Sortino Ratio': f"{sortino_ratio:.2f}",
+        'Calmar Ratio': f"{calmar_ratio:.2f}",
         'Win Rate': f"{win_rate:.2%}",
         'Final Capital': f"{initial_capital * (1 + total_return):.2f}"
     }

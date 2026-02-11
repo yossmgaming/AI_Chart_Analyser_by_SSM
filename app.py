@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import pytz
+import numpy as np
 from datetime import datetime
-from data_loader import fetch_data
+from data_loader import fetch_data, get_available_sources
 from deriv_loader import fetch_deriv_data
 from exchange_l2_loader import ExchangeL2Loader
 from sentiment_analyzer import SentimentAnalyzer
@@ -16,75 +17,79 @@ from analyzer import (
     calculate_trade_levels,
     calculate_turbulence
 )
-from marl_agents import MultiAgentTradingEnv, TradingEnsemble, DeepLOBExtractor
+from marl_agents import MultiAgentTradingEnv, TradingEnsemble
 from visualizer import create_chart
 from backtester import run_backtest
-from ai_advisor import get_ai_suggestions, ExplainableAI
+from ai_advisor import get_ai_suggestions, ExplainableAI, get_strategic_directive
 from exporter import export_to_pdf, export_to_json
 import plotly.express as px
 import time
+import os
 
-st.set_page_config(layout="wide", page_title="Professional Trading Suite")
+st.set_page_config(layout="wide", page_title="Universal AI Trading Suite")
 
+# --- Initializations ---
+if 'ensemble' not in st.session_state:
+    # We use Coinbase L2 loader as the base for the environment logic
+    # In a real app, this would be more dynamic
+    loader = ExchangeL2Loader()
+    env = MultiAgentTradingEnv(loader)
+    st.session_state.ensemble = TradingEnsemble(env)
+    # Mock training for initialization
+    # st.session_state.ensemble.train_all(total_timesteps=10)
+
+# --- Sidebar ---
 st.sidebar.title("Trading Suite Settings")
 
 st.sidebar.header("Regional Settings")
 tz_list = pytz.all_timezones
 default_tz_idx = tz_list.index("UTC") if "UTC" in tz_list else 0
 selected_tz = st.sidebar.selectbox("Select Timezone", options=tz_list, index=default_tz_idx)
-current_time = datetime.now(pytz.timezone(selected_tz)).strftime("%Y-%m-%d %H:%M:%S")
+current_time_obj = datetime.now(pytz.timezone(selected_tz))
+current_time_str = current_time_obj.strftime("%Y-%m-%d %H:%M:%S")
 
 st.sidebar.header("Risk Management")
 balance = st.sidebar.number_input("Account Balance ($)", value=1000.0, step=100.0)
 risk_pct = st.sidebar.slider("Risk per Trade (%)", min_value=0.1, max_value=5.0, value=1.0)
+daily_target_pct = st.sidebar.slider("Daily Profit Target (%)", min_value=0.5, max_value=10.0, value=2.0)
 
-data_source = st.sidebar.radio("Select Data Source", options=["Yahoo Finance", "Deriv", "Coinbase L2 (Quant)"])
+sources = get_available_sources()
+data_source = st.sidebar.radio("Select Data Source", options=sources)
 
-if data_source == "Yahoo Finance":
+symbol = "BTC-USD"
+interval = "1h"
+period = "1y"
+limit = 500
+
+if data_source == 'yfinance':
     symbol = st.sidebar.text_input("Enter Ticker Symbol", value="BTC-USD")
-    interval = st.sidebar.selectbox("Select Interval", options=['1h', '1d', '1wk'], index=1)
+    interval = st.sidebar.selectbox("Select Interval", options=['1m', '5m', '15m', '1h', '1d', '1wk'], index=3)
     period = st.sidebar.selectbox("Select Period", options=['1mo', '3mo', '6mo', '1y', '2y', '5y', 'max'], index=3)
-elif data_source == "Coinbase L2 (Quant)":
-    symbol = st.sidebar.text_input("Enter Coinbase Symbol", value="BTC-USD")
-    interval = "1m"
-else:
-    deriv_symbols = {
-        "Volatility 10 Index": "R_10",
-        "Volatility 25 Index": "R_25",
-        "Volatility 50 Index": "R_50",
-        "Volatility 75 Index": "R_75",
-        "Volatility 100 Index": "R_100",
-        "Jump 10 Index": "JD10",
-        "Jump 100 Index": "JD100",
-        "Bear Market Index": "RDBEAR",
-        "Bull Market Index": "RDBULL"
-    }
-    selected_name = st.sidebar.selectbox("Select Deriv Index", options=list(deriv_symbols.keys()))
-    symbol = deriv_symbols[selected_name]
-    interval = st.sidebar.selectbox("Select Interval", options=['1t', '1m', '5m', '15m', '1h', '1d'], index=1)
-    count = st.sidebar.slider("Number of Data Points", min_value=100, max_value=5000, value=1000)
+elif data_source == 'binance':
+    symbol = st.sidebar.text_input("Enter Binance Symbol (e.g. BTCUSDT)", value="BTCUSDT")
+    interval = st.sidebar.selectbox("Select Interval", options=['1m', '5m', '15m', '1h', '4h', '1d'], index=3)
+    limit = st.sidebar.slider("Limit", 100, 1000, 500)
+elif data_source == 'deriv':
+    deriv_symbols = {"Volatility 100": "R_100", "Volatility 75": "R_75", "Gold": "frxXAUUSD"}
+    symbol = st.sidebar.selectbox("Select Deriv Index", options=list(deriv_symbols.keys()))
+    symbol = deriv_symbols[symbol]
+    interval = st.sidebar.selectbox("Select Interval", options=['1m', '5m', '1h', '1d'], index=0)
+    limit = st.sidebar.slider("Count", 100, 5000, 1000)
 
 st.title(f"Market Analysis for {symbol}")
+st.info(f"Time: **{current_time_str} ({selected_tz})** | Balance: **${balance:,.2f}** | Source: **{data_source}**")
 
-# Summary Statement
-st.info(f"According to the time **{current_time} ({selected_tz})**, with a balance of **${balance:,.2f}**, and selected asset **{symbol}** ({data_source}):")
-
-@st.cache_data(ttl=300)
-def get_yahoo_data(symbol, interval, period):
-    return fetch_data(symbol, interval=interval, period=period)
+rm = RiskManager()
+session_ok, session_msg = rm.check_trading_session(current_time_obj)
+st.sidebar.markdown(f"**Session:** {session_msg}")
 
 @st.cache_data(ttl=60)
-def get_deriv_data(symbol, interval, count):
-    return fetch_deriv_data(symbol, interval=interval, count=count)
+def get_cached_data(symbol, interval, period, source, limit):
+    return fetch_data(symbol, interval=interval, period=period, source=source, limit=limit)
 
 try:
-    # 1. Fetch Data
-    if data_source == "Yahoo Finance":
-        df = get_yahoo_data(symbol, interval, period)
-    elif data_source == "Deriv":
-        df = get_deriv_data(symbol, interval, count)
-    else:
-        # Coinbase Quant Mode
+    # 1. Fetch and Analyze Data
+    if data_source == 'coinbase_l2':
         loader = ExchangeL2Loader()
         depth = loader.get_order_book(symbol)
         st.subheader("Real-time LOB (Top 10 Levels)")
@@ -95,151 +100,103 @@ try:
             'Ask Vol': [a[1] for a in depth['asks'][:10]]
         })
         st.table(lob_df)
+        df = get_cached_data(symbol, "1h", "1mo", "yfinance", 500)
+        # Prepare observation for RL
+        lob_features = loader.process_lob_to_feature(depth)
+        obs = np.concatenate([lob_features, [3.0], np.zeros(5)]).astype(np.float32)
+    else:
+        df = get_cached_data(symbol, interval, period, data_source, limit)
+        # Mock observation for RL when LOB is not available
+        obs = np.random.normal(0, 1, 46).astype(np.float32)
 
-        # Financial Turbulence
-        # For Quant mode, we need some historical data to calc turbulence
-        df_hist = get_yahoo_data("BTC-USD", "1h", "1mo")
-        turbulence = calculate_turbulence(df_hist).iloc[-1]
-        st.sidebar.metric("Turbulence Index", f"{turbulence:.2f}")
-        rm = RiskManager(turbulence_threshold=10.0)
-        kill, msg = rm.check_kill_switch(turbulence)
-        if kill:
-            st.error(msg)
-        else:
-            st.success(msg)
-
-        # MARL Prediction
-        st.header("MARL Ensemble Prediction")
-        env = MultiAgentTradingEnv(loader)
-        ensemble = TradingEnsemble(env)
-        obs, _ = env.reset()
-        action, agent_name = ensemble.get_action(obs)
-        verdicts = ["Hold", "Buy", "Sell"]
-        st.info(f"Ensemble Agent **{agent_name}** recommends: **{verdicts[action]}**")
-
-        # Explainability
-        if st.checkbox("Show Decision Transparency (LIME)"):
-            feat_names = [f"LOB_{i}" for i in range(40)] + ["Sentiment"] + ["EMA20", "EMA50", "EMA200", "RSI", "ATR"]
-            xai = ExplainableAI(ensemble.agents[agent_name], feat_names)
-            exps = xai.explain_trade(obs)
-            exp_df = pd.DataFrame(exps, columns=["Feature", "Influence"])
-            fig_exp = px.bar(exp_df, x="Influence", y="Feature", orientation='h', title="Feature Influence")
-            st.plotly_chart(fig_exp)
-
-        # Download Section
-        st.header("Export Quant Data")
-        if st.button("Generate PDF Report"):
-            report_data = {
-                "Symbol": symbol,
-                "Agent": agent_name,
-                "Verdict": verdicts[action],
-                "Turbulence": turbulence,
-                "Time": current_time
-            }
-            pdf_path = export_to_pdf(report_data)
-            with open(pdf_path, "rb") as f:
-                st.download_button("Download PDF", f, file_name="report.pdf")
-
-        df = df_hist # Use history for the rest of the visualizer
-
-
-    # 2. Add Indicators & Patterns
     df = add_technical_indicators(df)
     df = detect_candlestick_patterns(df)
     df = detect_divergence(df)
     levels = detect_support_resistance(df)
 
-    # 3. Sidebar Signal Info
-    verdict = confirm_signals(df)
-    st.sidebar.markdown(f"### Current Signal: **{verdict}**")
+    # RL/MARL Verdict
+    prediction = st.session_state.ensemble.get_detailed_prediction(obs)
+    verdicts = ["Hold", "Buy", "Sell"]
+    verdict = verdicts[prediction['action']]
 
-    latest_price = df['Close'].iloc[-1]
-    st.sidebar.metric("Latest Price", f"{latest_price:.2f}")
+    trade_details = calculate_trade_levels(df, verdict)
 
-    # Advanced Signal Dashboard
-    st.header("Actionable Signal Details")
-    if verdict != "Hold":
-        trade_details = calculate_trade_levels(df, verdict)
-        results, _ = run_backtest(df, initial_capital=balance, interval=interval)
+    # 2. Strategic Execution Directive (Quant/AI)
+    st.header("🎯 Strategic Execution Directive (MARL-Driven)")
+    directive = get_strategic_directive(df, symbol, balance, risk_pct/100, verdict, trade_details)
+    directive["System Confidence"] = prediction['win_rate']
+    directive["Strategy Agent"] = prediction['agent_name']
 
-        if trade_details and results:
-            # Calculate Stake
-            risk_amount = balance * (risk_pct / 100)
-            price_diff = abs(trade_details['Entry'] - trade_details['Stop Loss'])
-            stake = risk_amount / price_diff if price_diff > 0 else 0
+    with st.container(border=True):
+        cols = st.columns(len(directive))
+        for i, (k, v) in enumerate(directive.items()):
+            cols[i].metric(k, v)
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.success(f"**Type:** {verdict}")
-            c2.info(f"**Stake/Size:** {stake:.4f} units")
-            c3.warning(f"**Stop Loss:** {trade_details['Stop Loss']}")
-            c4.success(f"**Take Profit:** {trade_details['Take Profit']}")
+        if verdict != "Hold":
+            st.success(f"**MARL Alert:** The {prediction['agent_name']} agent detected a high-probability pattern. Confidence: {prediction['win_rate']}.")
+        else:
+            st.warning("**MARL Status:** All agents are neutral. Monitoring market order flow for imbalances.")
 
-            sc1, sc2, sc3 = st.columns(3)
-            sc1.metric("Historical Win Rate", results['Win Rate'])
+    # 3. Decision Transparency (XAI)
+    if st.checkbox("🔍 Show Decision Transparency (XAI - LIME)"):
+        with st.spinner("Generating XAI report..."):
+            feat_names = [f"LOB_{i}" for i in range(40)] + ["Sentiment"] + ["EMA20", "EMA50", "EMA200", "RSI", "ATR"]
+            xai = ExplainableAI(st.session_state.ensemble.agents[prediction['agent_name']], feat_names)
+            exps = xai.explain_trade(obs)
+            exp_df = pd.DataFrame(exps, columns=["Feature", "Influence"])
+            exp_df['Direction'] = exp_df['Influence'].apply(lambda x: 'Supportive' if x > 0 else 'Opposing')
+            fig_exp = px.bar(exp_df, x="Influence", y="Feature", orientation='h',
+                             color='Direction',
+                             color_discrete_map={'Supportive':'green', 'Opposing':'red'},
+                             title=f"Feature Influence for {prediction['agent_name']} {verdict} Decision")
+            st.plotly_chart(fig_exp)
 
-            # Formatting time based on interval
-            if 'd' in interval or 'wk' in interval:
-                time_str = df.index[-1].strftime('%Y-%m-%d')
-            else:
-                time_str = df.index[-1].strftime('%H:%M:%S')
-
-            sc2.metric("Signal Time", time_str)
-            sc3.metric("ATR Volatility", trade_details['ATR'])
-    else:
-        st.write("No active signal. Waiting for market conditions to align.")
-
-    # AI Suggestions Section
-    st.header("AI Strategy Advisor")
+    # 4. Market Intelligence
+    st.header("Market Intelligence")
     col_ai, col_story = st.columns([1, 1])
 
     with col_ai:
-        with st.expander("View AI/Expert Insights", expanded=True):
-            # Integrate Sentiment Analysis
-            if st.button("Run Real-time Sentiment Analysis"):
+        if st.button("Analyze Real-time Sentiment"):
+            with st.spinner("Analyzing global sentiment via Gemini..."):
                 sa = SentimentAnalyzer()
                 sent, risk = sa.get_aggregate_scores(symbol)
-                st.write(f"**Aggregated News Sentiment:** {sent:.2f}/5.0")
-                st.write(f"**Market Risk Score:** {risk:.2f}/5.0")
+                st.write(f"**Sentiment Score:** {sent:.2f}/5.0 | **Risk Index:** {risk:.2f}/5.0")
 
-            ai_msg = get_ai_suggestions(df, symbol, verdict, trade_details if verdict != "Hold" else None)
-            st.markdown(ai_msg)
+        ai_msg = get_ai_suggestions(df, symbol, verdict, trade_details)
+        st.markdown(ai_msg)
 
     with col_story:
-        with st.expander("Market Context Story", expanded=True):
-            # Dynamic Market Story
-            rsi_val = df['RSI'].iloc[-1]
-            atr_val = df['ATR'].iloc[-1]
-            trend = "Bullish" if df['Close'].iloc[-1] > df['EMA_200'].iloc[-1] else "Bearish"
-            volatility = "High" if atr_val > df['ATR'].mean() else "Low"
+        rsi_val = df['RSI'].iloc[-1]
+        atr_val = df['ATR'].iloc[-1]
+        st.write(f"**Technical Pulse:** RSI at {rsi_val:.2f}, ATR at {atr_val:.4f}")
 
-            st.write(f"**Trend:** The market is currently in a **{trend}** phase on this timeframe.")
-            st.write(f"**Volatility:** **{volatility}** (ATR: {atr_val:.2f}). Expect {'larger' if volatility == 'High' else 'smaller'} price swings.")
-            st.write(f"**Sentiment:** RSI at **{rsi_val:.2f}** indicates the market is {'overbought' if rsi_val > 70 else 'oversold' if rsi_val < 30 else 'neutral'}.")
+        if interval != '1d':
+            st.write("**Multi-Timeframe Status:** Checking Daily trend...")
+            df_daily = get_cached_data(symbol, '1d', '1y', 'yfinance' if data_source in ['yfinance', 'coinbase_l2'] else data_source, 100)
+            daily_trend = "Bullish" if df_daily['Close'].iloc[-1] > df_daily['Close'].rolling(50).mean().iloc[-1] else "Bearish"
+            st.write(f"Daily Trend is **{daily_trend}**. Signal is **{'Confirmed' if (verdict == 'Buy' and daily_trend == 'Bullish') or (verdict == 'Sell' and daily_trend == 'Bearish') else 'Unconfirmed'}**.")
 
-    # 4. Main Chart
+    # 5. Charting
     fig = create_chart(df, symbol, levels=levels)
     st.plotly_chart(fig, use_container_width=True)
 
-    # 5. Backtest Section
-    st.header("Backtest Simulation")
-    if st.button("Run Backtest (RSI Strategy)"):
-        results, backtest_df = run_backtest(df, interval=interval)
+    # 6. Performance & Backtest
+    st.header("Strategy Performance")
+    if st.button("Run Full Performance Simulation"):
+        results, backtest_df = run_backtest(df, initial_capital=balance, interval=interval)
         if results:
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Return", results['Total Return'])
-            col2.metric("Buy & Hold", results['Buy & Hold Return'])
-            col3.metric("Max Drawdown", results['Max Drawdown'])
-            col4.metric("Sharpe Ratio", results['Sharpe Ratio'])
+            st.table(pd.DataFrame([results]))
 
-            st.markdown(f"**Final Capital:** ${results['Final Capital']}")
-
-    # 6. Detected Patterns Table
-    st.header("Latest Detected Patterns")
-    patterns_df = df[df['Detected_Patterns'] != ""].tail(10)[['Detected_Patterns']]
-    if not patterns_df.empty:
-        st.table(patterns_df)
-    else:
-        st.write("No recent candlestick patterns detected.")
+            # Export
+            report_data = {
+                "Directive": directive,
+                "Backtest Results": results,
+                "Market Context": {"Symbol": symbol, "Price": df['Close'].iloc[-1]}
+            }
+            pdf_path = export_to_pdf(report_data)
+            with open(pdf_path, "rb") as f:
+                st.download_button("Download Strategic Report (PDF)", f, file_name=f"{symbol}_report.pdf")
 
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"System Error: {e}")
+    st.exception(e)

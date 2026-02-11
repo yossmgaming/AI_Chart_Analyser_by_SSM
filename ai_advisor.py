@@ -39,7 +39,7 @@ class ExplainableAI:
 
 def get_ai_suggestions(df, symbol, verdict, trade_details=None, explanations=None):
     """
-    Fetches AI-driven trading suggestions.
+    Fetches AI-driven trading suggestions as a Master Consultant.
     Attempts to use Google Gemini if API_KEY is present, otherwise uses rule-based logic.
     """
     api_key = os.getenv("GOOGLE_API_KEY")
@@ -59,9 +59,10 @@ def get_ai_suggestions(df, symbol, verdict, trade_details=None, explanations=Non
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-pro')
+            # Use 1.5-flash or 2.0-flash if possible, fallback to pro
+            model = genai.GenerativeModel('gemini-1.5-flash')
             prompt = f"""
-            As a professional trading assistant, analyze the following data for {symbol}:
+            You are a Master Quant Consultant. Analyze the following data for {symbol}:
             - Action: {verdict}
             - Current Price: {context['price']}
             - RSI: {context['rsi']}
@@ -69,12 +70,14 @@ def get_ai_suggestions(df, symbol, verdict, trade_details=None, explanations=Non
             - Recommended Stop Loss: {context['sl']}
             - Recommended Take Profit: {context['tp']}
 
-            Provide a brief strategy explanation, the primary risk for this trade, and one 'pro deal' or tip for this specific setup.
+            Your goal is to provide a Strategic Order Blueprint.
+            Explain why the DeepLOB model and MARL agents reached this conclusion.
+            Highlight the 'Informational Advantage' we have over manual traders.
 
             Context on Model Decision (LIME Explanations):
             {explanations if explanations else "No specific model data available."}
 
-            Keep it concise and professional.
+            Be authoritative, professional, and concise.
             """
             response = model.generate_content(prompt)
             return response.text
@@ -107,3 +110,55 @@ def get_ai_suggestions(df, symbol, verdict, trade_details=None, explanations=Non
     suggestions += "\n\n**Pro Tip:** Always check the economic calendar for high-impact news before executing."
 
     return suggestions
+
+def get_strategic_directive(df, symbol, balance, risk_pct, verdict, trade_details):
+    """
+    Constructs the specific 'Buy at X, Sell after N minutes' directive requested.
+    """
+    from risk_manager import RiskManager
+    rm = RiskManager()
+
+    daily_target = rm.calculate_daily_target(balance)
+    session_ok, session_msg = rm.check_trading_session()
+
+    returns = df['Close'].pct_change().dropna()
+    stake = rm.get_adaptive_stake(balance, returns, risk_pct)
+
+    latest = df.iloc[-1]
+    price = latest['Close']
+
+    # Heuristic for duration: Based on ATR / Avg return per period
+    # If ATR is 1% and we want 2% profit, it might take 2 periods.
+    atr = latest['ATR'] if 'ATR' in latest else price * 0.01
+    target_profit = abs(trade_details['Take Profit'] - trade_details['Entry']) if trade_details else atr * 2
+
+    # Avg candle size (High-Low)
+    avg_volatility = (df['High'] - df['Low']).tail(20).mean()
+    if avg_volatility == 0: avg_volatility = atr
+
+    estimated_periods = max(1, int(target_profit / avg_volatility))
+
+    # Convert periods to minutes
+    # We need to know the interval. Let's assume 1m for this calculation if not specified,
+    # but ideally we get it from the dataframe frequency.
+    interval_min = 1
+    if hasattr(df.index, 'freq') and df.index.freq:
+        interval_min = df.index.freq.delta.total_seconds() / 60
+    else:
+        # Infer from index
+        if len(df) > 1:
+            interval_min = (df.index[1] - df.index[0]).total_seconds() / 60
+
+    estimated_minutes = int(estimated_periods * interval_min)
+
+    directive = {
+        "Strategic Daily Target": f"${daily_target:.2f}",
+        "Optimized Stake": f"${stake:.2f}",
+        "Action": verdict,
+        "Entry Price": f"{trade_details['Entry']:.5f}" if trade_details else f"{price:.5f}",
+        "Target Duration": f"{estimated_minutes} minutes",
+        "Expected Profit": f"${(stake * (target_profit/trade_details['Entry'] if trade_details else 0)):.2f}" if trade_details else "TBD",
+        "Session Status": session_msg
+    }
+
+    return directive

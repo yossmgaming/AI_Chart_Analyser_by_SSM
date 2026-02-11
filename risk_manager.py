@@ -49,6 +49,50 @@ class RiskManager:
         cvar = abs(sorted_returns[:index].mean())
         return var, cvar
 
+    def get_adaptive_stake(self, balance, returns, risk_pct=0.01):
+        """
+        Suggests a stake size based on CVaR to protect low equity.
+        """
+        var, cvar = self.calculate_var_cvar(returns)
+        if cvar == 0:
+            return balance * risk_pct
+
+        # If CVaR is high (e.g. 5% loss in tail), we reduce stake
+        # Logic: Stake * CVaR should not exceed Balance * Risk_Pct
+        suggested_stake = (balance * risk_pct) / cvar
+        return min(suggested_stake, balance * 0.2) # Max 20% of balance
+
+    def check_trading_session(self, current_time=None):
+        """
+        Returns whether the current time is optimal for trading.
+        Generally, high volume sessions (NY/London) are better.
+        """
+        import pytz
+        from datetime import datetime
+        if current_time is None:
+            current_time = datetime.now(pytz.UTC)
+
+        hour = current_time.hour
+        # London: 8-16 UTC, NY: 13-21 UTC
+        # Overlap: 13-16 UTC (Best)
+        is_london = 8 <= hour <= 16
+        is_ny = 13 <= hour <= 21
+
+        if is_london and is_ny:
+            return True, "Peak Market Overlap (London & NY). High liquidity/volatility."
+        elif is_london:
+            return True, "London Session. Good liquidity."
+        elif is_ny:
+            return True, "NY Session. Good liquidity."
+        else:
+            return False, "Off-peak hours. Expect lower liquidity and potential chop."
+
+    def calculate_daily_target(self, balance, target_pct=0.02):
+        """
+        Returns the daily profit target in currency.
+        """
+        return balance * target_pct
+
 if __name__ == "__main__":
     rm = RiskManager()
     mock_returns = pd.DataFrame(np.random.normal(0, 0.01, (100, 1)))
