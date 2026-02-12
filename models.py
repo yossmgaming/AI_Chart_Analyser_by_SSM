@@ -24,7 +24,11 @@ class DeepLOBModel(nn.Module):
         super(DeepLOBModel, self).__init__()
         self.extractor = DeepLOBFeatureExtractor(num_levels, num_features)
         self.lstm = nn.LSTM(input_size=32 * 10, hidden_size=64, num_layers=1, batch_first=True)
-        self.fc = nn.Linear(64, num_classes)
+
+        # Multi-horizon prediction heads (10, 50, 100 ticks)
+        self.head_10 = nn.Linear(64, num_classes)
+        self.head_50 = nn.Linear(64, num_classes)
+        self.head_100 = nn.Linear(64, num_classes)
 
     def forward(self, x):
         # x: (Batch, Seq, Features)
@@ -34,4 +38,11 @@ class DeepLOBModel(nn.Module):
         x = x.permute(0, 2, 1, 3).contiguous()
         x = x.view(batch_size, seq_len, -1)
         output, _ = self.lstm(x)
-        return self.fc(output[:, -1, :])
+
+        last_step = output[:, -1, :]
+
+        out_10 = self.head_10(last_step)
+        out_50 = self.head_50(last_step)
+        out_100 = self.head_100(last_step)
+
+        return out_10, out_50, out_100

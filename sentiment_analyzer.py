@@ -5,7 +5,7 @@ import yfinance as yf
 import json
 
 class SentimentAnalyzer:
-    def __init__(self, model_name='models/gemini-2.5-flash'):
+    def __init__(self, model_name='models/gemini-1.5-flash'):
         self.api_key = os.getenv("GOOGLE_API_KEY")
         if self.api_key:
             genai.configure(api_key=self.api_key)

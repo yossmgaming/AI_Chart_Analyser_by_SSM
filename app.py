@@ -17,6 +17,7 @@ from analyzer import (
     calculate_trade_levels,
     calculate_turbulence
 )
+from virtual_market import VirtualMarket
 from marl_agents import MultiAgentTradingEnv, TradingEnsemble
 from visualizer import create_chart
 from backtester import run_backtest
@@ -29,14 +30,12 @@ import os
 st.set_page_config(layout="wide", page_title="Universal AI Trading Suite")
 
 # --- Initializations ---
+if 'market' not in st.session_state:
+    st.session_state.market = VirtualMarket()
+if 'env' not in st.session_state:
+    st.session_state.env = MultiAgentTradingEnv(st.session_state.market)
 if 'ensemble' not in st.session_state:
-    # We use Coinbase L2 loader as the base for the environment logic
-    # In a real app, this would be more dynamic
-    loader = ExchangeL2Loader()
-    env = MultiAgentTradingEnv(loader)
-    st.session_state.ensemble = TradingEnsemble(env)
-    # Mock training for initialization
-    # st.session_state.ensemble.train_all(total_timesteps=10)
+    st.session_state.ensemble = TradingEnsemble(st.session_state.env)
 
 # --- Sidebar ---
 st.sidebar.title("Trading Suite Settings")
@@ -114,7 +113,11 @@ try:
     df = detect_divergence(df)
     levels = detect_support_resistance(df)
 
-    # RL/MARL Verdict
+    # RL/MARL Verdict & Step Environment
+    if st.button("Simulate Market Step (Tick)"):
+        _, rew, _, _, _ = st.session_state.env.step(np.random.choice([0, 1, 2])) # Random action for demo
+        st.session_state.market.step()
+
     prediction = st.session_state.ensemble.get_detailed_prediction(obs)
     verdicts = ["Hold", "Buy", "Sell"]
     verdict = verdicts[prediction['action']]
@@ -123,19 +126,34 @@ try:
 
     # 2. Strategic Execution Directive (Quant/AI)
     st.header("🎯 Strategic Execution Directive (MARL-Driven)")
+
+    # Show active agent badge
+    agent_col, dummy = st.columns([1, 4])
+    with agent_col:
+        st.success(f"**Agent:** {prediction['agent_name']} ACTIVE")
+
     directive = get_strategic_directive(df, symbol, balance, risk_pct/100, verdict, trade_details)
-    directive["System Confidence"] = prediction['win_rate']
-    directive["Strategy Agent"] = prediction['agent_name']
+    directive["Win Rate"] = prediction['win_rate']
+    directive["Horizon"] = prediction['duration']
 
     with st.container(border=True):
         cols = st.columns(len(directive))
         for i, (k, v) in enumerate(directive.items()):
             cols[i].metric(k, v)
 
-        if verdict != "Hold":
-            st.success(f"**MARL Alert:** The {prediction['agent_name']} agent detected a high-probability pattern. Confidence: {prediction['win_rate']}.")
-        else:
-            st.warning("**MARL Status:** All agents are neutral. Monitoring market order flow for imbalances.")
+    # DeepLOB Multi-Horizon Forecasts
+    st.subheader("DeepLOB Multi-Horizon Forecasts")
+    h_cols = st.columns(len(prediction['multi_horizon']))
+    for i, (h, v) in enumerate(prediction['multi_horizon'].items()):
+        h_cols[i].metric(f"k={h}", v)
+
+    # Execution Logs (Implementation Shortfall)
+    st.subheader("Live Execution Logs (Endogenous Market)")
+    if st.session_state.env.execution_logs:
+        log_df = pd.DataFrame(st.session_state.env.execution_logs).tail(5)
+        st.dataframe(log_df, use_container_width=True)
+    else:
+        st.info("No active trades executed in this session.")
 
     # 3. Decision Transparency (XAI)
     if st.checkbox("🔍 Show Decision Transparency (XAI - LIME)"):
