@@ -31,4 +31,4 @@ def fetch_data(symbol: str, interval: str = '1d', period: str = '1y', source: st
         raise ValueError(f"Unsupported source: {source}")
 
 def get_available_sources():
-    return ['yfinance', 'binance', 'deriv', 'coinbase_l2']
+    return ['yfinance', 'binance', 'deriv', 'coinbase_l2', 'simulation_demo']

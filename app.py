@@ -38,6 +38,10 @@ if 'ensemble' not in st.session_state:
     st.session_state.ensemble = TradingEnsemble(st.session_state.env)
 
 # --- Sidebar ---
+if st.sidebar.button("Reset Session & Simulation"):
+    st.session_state.clear()
+    st.rerun()
+
 st.sidebar.title("Trading Suite Settings")
 
 st.sidebar.header("Regional Settings")
@@ -88,7 +92,31 @@ def get_cached_data(symbol, interval, period, source, limit):
 
 try:
     # 1. Fetch and Analyze Data
-    if data_source == 'coinbase_l2':
+    if data_source == 'simulation_demo':
+        depth = st.session_state.market.get_lob_snapshot()
+        st.subheader("Simulation LOB (Endogenous)")
+        lob_df = pd.DataFrame({
+            'Bid Price': [b[0] for b in depth['bids']],
+            'Bid Vol': [b[1] for b in depth['bids']],
+            'Ask Price': [a[0] for a in depth['asks']],
+            'Ask Vol': [a[1] for a in depth['asks']]
+        })
+        st.table(lob_df)
+        # Mock historical DF for indicators from simulation history
+        hist = list(st.session_state.market.history)
+        if len(hist) < 100:
+             # Seed with some random data if history is short
+             hist = [st.session_state.market.mid_price * (1 + np.random.normal(0, 0.01)) for _ in range(100)]
+
+        df = pd.DataFrame({'Close': hist, 'High': hist, 'Low': hist, 'Open': hist})
+
+        # Prepare observation for RL
+        lob_features = []
+        for i in range(10):
+            lob_features.extend([depth['asks'][i][0], depth['asks'][i][1], depth['bids'][i][0], depth['bids'][i][1]])
+        obs = np.concatenate([lob_features, [3.0], np.zeros(5)]).astype(np.float32)
+
+    elif data_source == 'coinbase_l2':
         loader = ExchangeL2Loader()
         depth = loader.get_order_book(symbol)
         st.subheader("Real-time LOB (Top 10 Levels)")
@@ -142,10 +170,11 @@ try:
             cols[i].metric(k, v)
 
     # DeepLOB Multi-Horizon Forecasts
-    st.subheader("DeepLOB Multi-Horizon Forecasts")
-    h_cols = st.columns(len(prediction['multi_horizon']))
-    for i, (h, v) in enumerate(prediction['multi_horizon'].items()):
-        h_cols[i].metric(f"k={h}", v)
+    if 'multi_horizon' in prediction:
+        st.subheader("DeepLOB Multi-Horizon Forecasts")
+        h_cols = st.columns(len(prediction['multi_horizon']))
+        for i, (h, v) in enumerate(prediction['multi_horizon'].items()):
+            h_cols[i].metric(f"k={h}", v)
 
     # Execution Logs (Implementation Shortfall)
     st.subheader("Live Execution Logs (Endogenous Market)")
